@@ -1,0 +1,10 @@
+Technical notes:
+1. do R-peak matching using Q-R-S sample IDs OR use the same filter as Muzaffer on the signal and use those R-peaks
+2. include training accuracy in tensorboard
+3. save model architecture + preprocessing pipeline + input/output dimensions + annotate the links/reports with accuracy and duration
+
+Approaches:
+1. try moving average + signal  (reach into other beats when calculating on the edges of beat slices)
+2. try moving average
+3. try only the points - we are trying to save data transfer; try embedding them using the link from Teams https://www.sciencedirect.com/science/article/pii/S0888327021001394
+4. try only the points - use binary masks
