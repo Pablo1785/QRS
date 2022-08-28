@@ -28,7 +28,8 @@ class ArrhythmiaDataset(Dataset):
     def __init__(self, root_dir: str, window_size: int, only_include_labels: Optional[List[str]] = None, load_data =
     True,
                  encode_labels =
-    True, include_manual_labels = False, moving_average_range: Optional[int] = None):
+    True, include_manual_labels = False, moving_average_range: Optional[int] = None, include_raw_signal: bool = True,
+                 subset_from_manual_labels = True):
         """
 
         :param root_dir: Directory path containing all .atr etc. record files
@@ -46,7 +47,7 @@ class ArrhythmiaDataset(Dataset):
         # files, by simply setting
         # appropriate fields after the call to the constructor
         if load_data:
-            self._load_data(include_manual_labels, moving_average_range)
+            self._load_data(include_manual_labels, moving_average_range, include_raw_signal, subset_from_manual_labels)
         if encode_labels:
             self.encode_labels()
 
@@ -54,7 +55,7 @@ class ArrhythmiaDataset(Dataset):
         """
 
         :param df: Columns are integers that indicate starting, middle, and final sample for each structural feature of
-        PQRST ECG wave
+        PQRST ECG wave as well as patient record number
         :return: Maps R-peaks of ECG wave to array of 5 rows, one for each of P, Q, R, S, T segments. Parts of the
         feature in a given row are masked with 1's, other parts are 0's
         """
@@ -71,25 +72,43 @@ class ArrhythmiaDataset(Dataset):
                 row_arr[3, row.R + idx_normalization_term + 1: row.S_e + idx_normalization_term] = 1
             if not np.isnan(row.T_s) and not np.isnan(row.T_e):
                 row_arr[4, row.T_s + idx_normalization_term: row.T_e + idx_normalization_term] = 1
-            r_to_data[row.R] = row_arr
+            r_to_data[(row.R, row.Record_number)] = row_arr
         return r_to_data
 
-    def _load_data(self, include_manual_labels: bool, moving_average_range: Optional[int] = None):
-        manual_label_dict = None
-        if include_manual_labels:
+    def _load_data(self, include_manual_labels: bool, moving_average_range: Optional[int] = None, include_raw_signal:
+    bool = True, subset_from_manual_labels = True):
+        manual_label_dict, manual_r_peaks, manual_record_numbers = None, None, None
+        if include_manual_labels or subset_from_manual_labels:
             manual_label_dict = dict()
             dirpath = os.path.join(os.path.dirname(self.root_dir), 'manual_labels')
             for filename in os.listdir(dirpath):
                 df = pd.read_csv(os.path.join(dirpath, filename))
                 manual_label_dict.update(self._df_to_channels(df))
                 print(f'{filename=} Unique_keys={len(manual_label_dict.keys())}')
+            manual_r_peaks, manual_record_numbers = np.array(list(zip(*manual_label_dict.keys())))
 
-        for filename in filter(lambda name: name.endswith('.atr') and name.replace('.atr',
-                                                                                   '').isdigit(),
-                               os.listdir(self.root_dir)):
-            record_path = os.path.join(self.root_dir,
-                                       filename.replace('.atr',
+        # Only include .atr patient files whose record numbers are present in manual label files
+        data_files = filter(lambda name: name.endswith('.atr') and name.replace('.atr',
+                                                                                   '').isdigit() and ((int(name.replace(
+            '.atr',
+                                                                                   '')) in manual_record_numbers) if
+        manual_record_numbers is not None else True),
+                               os.listdir(self.root_dir))
+
+        for filename in data_files:
+            curr_patient_manual_label_dict = None
+            patient_record_number = int(filename.replace('.atr',
                                                         ''))
+            print(f'{filename=} {patient_record_number=}')
+
+            if manual_label_dict:
+                # Only include manual label dict entries for the current patient
+                curr_patient_manual_label_dict = {r_peak: v for (r_peak, record_number),
+                                                                 v in manual_label_dict.items() if record_number ==
+                                                  patient_record_number}
+
+
+            record_path = os.path.join(self.root_dir, str(patient_record_number))
             record = load_record(record_path)
             signal = np.array(record['MLII'])
 
@@ -97,17 +116,16 @@ class ArrhythmiaDataset(Dataset):
             if self.only_include_labels:
                 record_annotation = get_beats_by_symbols(record_annotation, self.only_include_labels)
 
-            if manual_label_dict:
-                record_annotation
-
             # Get data
             beat_slice_array, beat_slice_indices = get_beat_slices(record_annotation,
                                           signal,
-                                          self.window_size, manual_label_dict, moving_average_range)
+                                          self.window_size, curr_patient_manual_label_dict, moving_average_range,
+                                                                   include_raw_signal, include_manual_labels)
             beat_slices = torch.tensor(beat_slice_array)
+            print(f'{beat_slice_array.shape=} {beat_slices.shape=}')
 
             # Get labels
-            if manual_label_dict:
+            if curr_patient_manual_label_dict:
                 label_list = record_annotation.loc[beat_slice_indices].symbol.tolist()
             else:
                 label_list = record_annotation.symbol.tolist()
@@ -117,6 +135,7 @@ class ArrhythmiaDataset(Dataset):
             if self.data is None:
                 self.data = beat_slices
             else:
+                print(f'{self.data.shape=} {beat_slices.shape=}')
                 self.data = torch.cat((self.data, beat_slices), dim = 0)
             assert self.data.shape[
                        0] == len(self.labels), f'Data contains {self.data.shape[0]} samples, but there a' \

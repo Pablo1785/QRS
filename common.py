@@ -2,6 +2,7 @@ from typing import (
     Dict,
     List,
     Optional,
+    Tuple,
 )
 
 import numpy as np
@@ -10,7 +11,7 @@ import torch
 import wfdb
 from scipy import signal
 
-MAX_MANUAL_R_PEAK_ERROR = 1  # in sample count; how much can the manually labeled R-peak differ from MIT-BIH dataset
+MAX_MANUAL_R_PEAK_ERROR = 25  # in sample count; how much can the manually labeled R-peak differ from MIT-BIH dataset
 # R-peak
 
 
@@ -147,7 +148,7 @@ def get_beats_by_symbols(record_annotation: pd.DataFrame, symbols: List[str]) ->
 
 def get_beat_slices(beats: pd.DataFrame, signal: np.array, window_size: int, manual_label_dict: Dict[int,
                                                                                                      np.ndarray] =
-None, moving_average_range: Optional[int] = None) -> \
+None, moving_average_range: Optional[int] = None, include_raw_signal = True, include_manual_labels = False) -> \
     (np.ndarray, list):
     """
     For each row in the beats DataFrame this function will return an array of size 2 * window_size.
@@ -161,9 +162,32 @@ None, moving_average_range: Optional[int] = None) -> \
     :return: beat slice array, indices of selected slices
     """
     beat_slices = []
-    beat_slice_shape = (list(manual_label_dict.values())[0].shape[0] + 1, 2 * window_size) if manual_label_dict else 2\
-                                                                                                                    * \
-                                                                                                           window_size
+
+    is_points = manual_label_dict and include_manual_labels
+    is_avg = moving_average_range
+    is_raw = include_raw_signal
+
+    beat_slice_shape = None
+    if is_points and not is_avg and not is_raw:
+        # Just the points
+        beat_slice_shape = (list(manual_label_dict.values())[0].shape[0], 2 * window_size)
+    elif is_points and ((is_avg and not is_raw) or (not is_avg and is_raw)):
+        # Points + moving average or raw signal
+        beat_slice_shape = (list(manual_label_dict.values())[0].shape[0] + 1, 2 * window_size)
+    elif is_points and is_avg and is_raw:
+        # Points + moving average + raw signal
+        beat_slice_shape = (list(manual_label_dict.values())[0].shape[0] + 2, 2 * window_size)
+    elif not is_points and ((is_avg and not is_raw) or (not is_avg and is_raw)):
+        # Moving average or raw signal
+        beat_slice_shape = 2 * window_size
+    elif not is_points and is_avg and is_raw:
+        # Moving average + raw signal
+        beat_slice_shape = (2, 2 * window_size)
+    elif not is_points and not is_avg and not is_raw:
+        raise ValueError(f'get_beat_slices requires at least 1 data source: raw signal, moving average or manual '
+                         f'label 11 points; but none were selected {manual_label_dict=} {moving_average_range=} '
+                         f'{include_raw_signal=}')
+
     beat_slice_indices = []
     if manual_label_dict:
         manual_r_peaks = np.array(list(manual_label_dict.keys()))
@@ -177,31 +201,76 @@ None, moving_average_range: Optional[int] = None) -> \
                                                           <= row.sample + MAX_MANUAL_R_PEAK_ERROR))]
             if not manual_label_dict_sample_key.size == 1:
                 continue
-            manual_label_dict_sample_key = manual_label_dict_sample_key[0]
-            print(f'{row.sample=} {manual_label_dict_sample_key=}')
+            manual_label_dict_sample_key, = manual_label_dict_sample_key
             beat_slice_indices.append(row.Index)
 
         beat_slice = np.zeros(beat_slice_shape)
-        if isinstance(beat_slice_shape, int):
-            if row.sample - window_size < 0:
-                beat_slice[abs(row.sample - window_size):] = signal[0: row.sample + window_size]
-            elif row.sample + window_size > signal.size:
-                beat_slice[:-abs(row.sample + window_size - signal.size)] = signal[row.sample - window_size:]
-            else:
-                beat_slice[:] = signal[row.sample - window_size: row.sample + window_size]
-            if moving_average_range:
-                beat_slice[:] = np.convolve(beat_slice[:], np.ones(moving_average_range), 'same') / moving_average_range
-        else:
+        if is_points and not is_avg and not is_raw:
+            # Just the points
+            beat_slice[:, :] = manual_label_dict[manual_label_dict_sample_key]
+        elif is_points and ((is_avg and not is_raw) or (not is_avg and is_raw)):
+            # Points + moving average or raw signal
             if row.sample - window_size < 0:
                 beat_slice[0, abs(row.sample - window_size):] = signal[0: row.sample + window_size]
             elif row.sample + window_size > signal.size:
                 beat_slice[0, :-abs(row.sample + window_size - signal.size)] = signal[row.sample - window_size:]
             else:
                 beat_slice[0, :] = signal[row.sample - window_size: row.sample + window_size]
-            beat_slice[1:, :] = manual_label_dict[manual_label_dict_sample_key]
-            if moving_average_range:
+            if is_avg:
                 beat_slice[0, :] = np.convolve(beat_slice[0, :], np.ones(moving_average_range),
                                                'same') / moving_average_range
+            beat_slice[1:, :] = manual_label_dict[manual_label_dict_sample_key]
+        elif is_points and is_avg and is_raw:
+            # Points + moving average + raw signal
+            if row.sample - window_size < 0:
+                beat_slice[0, abs(row.sample - window_size):] = signal[0: row.sample + window_size]
+            elif row.sample + window_size > signal.size:
+                beat_slice[0, :-abs(row.sample + window_size - signal.size)] = signal[row.sample - window_size:]
+            else:
+                beat_slice[0, :] = signal[row.sample - window_size: row.sample + window_size]
+            beat_slice[1, :] = np.convolve(beat_slice[1, :], np.ones(moving_average_range),
+                                           'same') / moving_average_range
+            beat_slice[2:, :] = manual_label_dict[manual_label_dict_sample_key]
+        elif not is_points and ((is_avg and not is_raw) or (not is_avg and is_raw)):
+            # Moving average or raw signal
+            if row.sample - window_size < 0:
+                beat_slice[abs(row.sample - window_size):] = signal[0: row.sample + window_size]
+            elif row.sample + window_size > signal.size:
+                beat_slice[:-abs(row.sample + window_size - signal.size)] = signal[row.sample - window_size:]
+            else:
+                beat_slice[:] = signal[row.sample - window_size: row.sample + window_size]
+            if is_avg:
+                beat_slice[:] = np.convolve(beat_slice[:], np.ones(moving_average_range), 'same') / moving_average_range
+        elif not is_points and is_avg and is_raw:
+            # Moving average + raw signal
+            if row.sample - window_size < 0:
+                beat_slice[0, abs(row.sample - window_size):] = signal[0: row.sample + window_size]
+            elif row.sample + window_size > signal.size:
+                beat_slice[0, :-abs(row.sample + window_size - signal.size)] = signal[row.sample - window_size:]
+            else:
+                beat_slice[0, :] = signal[row.sample - window_size: row.sample + window_size]
+            beat_slice[1, :] = np.convolve(beat_slice[1, :], np.ones(moving_average_range),
+                                           'same') / moving_average_range
+
+
+        # if isinstance(beat_slice_shape, int):
+        #     if row.sample - window_size < 0:
+        #         beat_slice[abs(row.sample - window_size):] = signal[0: row.sample + window_size]
+        #     elif row.sample + window_size > signal.size:
+        #         beat_slice[:-abs(row.sample + window_size - signal.size)] = signal[row.sample - window_size:]
+        #     else:
+        #         beat_slice[:] = signal[row.sample - window_size: row.sample + window_size]
+        #     if is_avg:
+        #         beat_slice[:] = np.convolve(beat_slice[:], np.ones(moving_average_range), 'same') / moving_average_range
+        # else:
+        #
+        #     if row.sample - window_size < 0:
+        #         beat_slice[0, abs(row.sample - window_size):] = signal[0: row.sample + window_size]
+        #     elif row.sample + window_size > signal.size:
+        #         beat_slice[0, :-abs(row.sample + window_size - signal.size)] = signal[row.sample - window_size:]
+        #     else:
+        #         beat_slice[0, :] = signal[row.sample - window_size: row.sample + window_size]
+        #     beat_slice[1:, :] = manual_label_dict[manual_label_dict_sample_key]
 
         beat_slices.append(beat_slice)
     beat_slices = np.array(beat_slices)

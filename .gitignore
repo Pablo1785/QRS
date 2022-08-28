@@ -2,3 +2,4 @@ data
 notebooks/runs
 __pycache__
 .idea
+models/
