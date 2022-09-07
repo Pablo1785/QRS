@@ -29,6 +29,7 @@ class ArrhythmiaDataset(Dataset):
     True,
                  encode_labels =
     True, include_manual_labels = False, moving_average_range: Optional[int] = None, include_raw_signal: bool = True,
+        include_derivative: bool = False,
                  subset_from_manual_labels = True):
         """
 
@@ -47,7 +48,8 @@ class ArrhythmiaDataset(Dataset):
         # files, by simply setting
         # appropriate fields after the call to the constructor
         if load_data:
-            self._load_data(include_manual_labels, moving_average_range, include_raw_signal, subset_from_manual_labels)
+            self._load_data(include_manual_labels, moving_average_range, include_raw_signal,
+                include_derivative, subset_from_manual_labels)
         if encode_labels:
             self.encode_labels()
 
@@ -76,7 +78,7 @@ class ArrhythmiaDataset(Dataset):
         return r_to_data
 
     def _load_data(self, include_manual_labels: bool, moving_average_range: Optional[int] = None, include_raw_signal:
-    bool = True, subset_from_manual_labels = True):
+    bool = True, include_derivative: bool = False, subset_from_manual_labels = True):
         manual_label_dict, manual_r_peaks, manual_record_numbers = None, None, None
         if include_manual_labels or subset_from_manual_labels:
             manual_label_dict = dict()
@@ -120,7 +122,8 @@ class ArrhythmiaDataset(Dataset):
             beat_slice_array, beat_slice_indices = get_beat_slices(record_annotation,
                                           signal,
                                           self.window_size, curr_patient_manual_label_dict, moving_average_range,
-                                                                   include_raw_signal, include_manual_labels)
+                                                                   include_raw_signal, include_derivative,
+                include_manual_labels)
             beat_slices = torch.tensor(beat_slice_array)
             print(f'{beat_slice_array.shape=} {beat_slices.shape=}')
 
