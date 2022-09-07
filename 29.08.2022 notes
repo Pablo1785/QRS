@@ -1,0 +1,19 @@
+1. Check device requirements (can the inference be done on an arduino device? can it be done on an average mobile phone?)
+2. Run the M5 model again on the same classes as other experiments and entire dataset
+3. Write a paragraph, include model description, computation times, did I consider other models?
+
+1. Memory usage (assuming 32-bit float weights): 
+    ~160kB => 40231 params for raw_signal + moving_average
+    ~160kB => 40510 params for 11_points
+    *~112kB => 28039 params for 11 points [IF we remove 6th Conv unit]
+    *~60kB => 15k params for 11 points [IF we remove 5th and 6th Conv unit]
+
+Board recommended by arduino has 256kB available:
+https://blog.arduino.cc/2019/10/15/get-started-with-machine-learning-on-arduino/
+
+2. Summary of results:
+98% (6080/6178) of accuracy after 65 epochs of training
+
+Time elapsed on NVidia GTX 1660 Ti Mobile: 16min 21sec
+
+3. 
