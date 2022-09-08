@@ -107,12 +107,22 @@ def run(moving_average_range, use_classes_from_manual_labels, subset_from_manual
         print(f'{dataset.get_label_from_tensor(label)}: {count}')
 
     # Drop some Normal beats to balance classes
-    normal_beat_mask = np.array(dataset.labels) == 'N'
+    label_array = np.array(dataset.labels)
+    normal_beat_mask = label_array == 'N'
+
+    # Second biggest class count, other than Normal
+    normal_label_count = np.sum(normal_beat_mask)
+    max_not_normal_label_count = 0
+    for idx, label in enumerate(dataset._label_list):
+        if label == 'N':
+            continue
+        class_count = np.sum(label_array == label)
+        max_not_normal_label_count = max(max_not_normal_label_count, class_count)
 
     new_labels = []
     for idx, l in enumerate(normal_beat_mask):
         # Leave 10% samples in (currently theres 75k samples, while other popular classes are at about 8k)
-        if l and random.uniform(0, 1) < 0.1:
+        if l and random.uniform(0, 1) < max_not_normal_label_count / normal_label_count:
             normal_beat_mask[idx] = False
         if not normal_beat_mask[idx]:
             new_labels.append(dataset.labels[idx])
@@ -364,7 +374,7 @@ def run(moving_average_range, use_classes_from_manual_labels, subset_from_manual
 
         print(f"\nTest Epoch: {epoch}\tAccuracy: {correct}/{len(test_loader.dataset)} ({accuracy:.4%})\n")
         return accuracy, precision, recall, f1, loss_sum
-    writer = SummaryWriter(log_dir = 'notebooks/runs')
+    writer = SummaryWriter()
 
     log_interval = 20
 
