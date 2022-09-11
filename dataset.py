@@ -7,12 +7,10 @@ from typing import (
 
 import numpy as np
 import pandas as pd
+import torch
+import torch.nn.functional as Fun
 from sklearn.model_selection import train_test_split
 from torch.utils.data import Dataset
-import torch.nn.functional as Fun
-import torch
-
-from sklearn.preprocessing import OneHotEncoder
 
 from common import (
     get_beat_slices,
@@ -25,12 +23,21 @@ from common import (
 class ArrhythmiaDataset(Dataset):
     """MIT-BIH Arrhythmia dataset."""
 
-    def __init__(self, root_dir: str, window_size: int, only_include_labels: Optional[List[str]] = None, load_data =
-    True,
-                 encode_labels =
-    True, include_manual_labels = False, moving_average_range: Optional[int] = None, include_raw_signal: bool = True,
+    def __init__(
+        self,
+        root_dir: str,
+        window_size: int,
+        only_include_labels: Optional[List[str]] = None,
+        load_data =
+        True,
+        encode_labels =
+        True,
+        include_manual_labels = False,
+        moving_average_ranges: Optional[List[int]] = None,
+        include_raw_signal: bool = True,
         include_derivative: bool = False,
-                 subset_from_manual_labels = True):
+        subset_from_manual_labels = True
+    ):
         """
 
         :param root_dir: Directory path containing all .atr etc. record files
@@ -48,8 +55,10 @@ class ArrhythmiaDataset(Dataset):
         # files, by simply setting
         # appropriate fields after the call to the constructor
         if load_data:
-            self._load_data(include_manual_labels, moving_average_range, include_raw_signal,
-                include_derivative, subset_from_manual_labels)
+            self._load_data(
+                include_manual_labels, moving_average_ranges, include_raw_signal,
+                include_derivative, subset_from_manual_labels
+            )
         if encode_labels:
             self.encode_labels()
 
@@ -77,8 +86,10 @@ class ArrhythmiaDataset(Dataset):
             r_to_data[(row.R, row.Record_number)] = row_arr
         return r_to_data
 
-    def _load_data(self, include_manual_labels: bool, moving_average_range: Optional[int] = None, include_raw_signal:
-    bool = True, include_derivative: bool = False, subset_from_manual_labels = True):
+    def _load_data(
+        self, include_manual_labels: bool, moving_average_ranges: Optional[List[int]] = None, include_raw_signal:
+        bool = True, include_derivative: bool = False, subset_from_manual_labels = True
+    ):
         manual_label_dict, manual_r_peaks, manual_record_numbers = None, None, None
         if include_manual_labels or subset_from_manual_labels:
             manual_label_dict = dict()
@@ -90,25 +101,35 @@ class ArrhythmiaDataset(Dataset):
             manual_r_peaks, manual_record_numbers = np.array(list(zip(*manual_label_dict.keys())))
 
         # Only include .atr patient files whose record numbers are present in manual label files
-        data_files = filter(lambda name: name.endswith('.atr') and name.replace('.atr',
-                                                                                   '').isdigit() and ((int(name.replace(
-            '.atr',
-                                                                                   '')) in manual_record_numbers) if
-        manual_record_numbers is not None else True),
-                               os.listdir(self.root_dir))
+        data_files = filter(
+            lambda name: name.endswith('.atr') and name.replace(
+                '.atr',
+                ''
+            ).isdigit() and ((int(
+                name.replace(
+                    '.atr',
+                    ''
+                )
+            ) in manual_record_numbers) if
+                             manual_record_numbers is not None else True),
+            os.listdir(self.root_dir)
+        )
 
         for filename in data_files:
             curr_patient_manual_label_dict = None
-            patient_record_number = int(filename.replace('.atr',
-                                                        ''))
+            patient_record_number = int(
+                filename.replace(
+                    '.atr',
+                    ''
+                )
+            )
             print(f'{filename=} {patient_record_number=}')
 
             if manual_label_dict:
                 # Only include manual label dict entries for the current patient
                 curr_patient_manual_label_dict = {r_peak: v for (r_peak, record_number),
-                                                                 v in manual_label_dict.items() if record_number ==
+                                                                v in manual_label_dict.items() if record_number ==
                                                   patient_record_number}
-
 
             record_path = os.path.join(self.root_dir, str(patient_record_number))
             record = load_record(record_path)
@@ -119,11 +140,13 @@ class ArrhythmiaDataset(Dataset):
                 record_annotation = get_beats_by_symbols(record_annotation, self.only_include_labels)
 
             # Get data
-            beat_slice_array, beat_slice_indices = get_beat_slices(record_annotation,
-                                          signal,
-                                          self.window_size, curr_patient_manual_label_dict, moving_average_range,
-                                                                   include_raw_signal, include_derivative,
-                include_manual_labels)
+            beat_slice_array, beat_slice_indices = get_beat_slices(
+                record_annotation,
+                signal,
+                self.window_size, curr_patient_manual_label_dict, moving_average_ranges,
+                include_raw_signal, include_derivative,
+                include_manual_labels
+            )
             beat_slices = torch.tensor(beat_slice_array)
             print(f'{beat_slice_array.shape=} {beat_slices.shape=}')
 
@@ -142,8 +165,8 @@ class ArrhythmiaDataset(Dataset):
                 self.data = torch.cat((self.data, beat_slices), dim = 0)
             assert self.data.shape[
                        0] == len(self.labels), f'Data contains {self.data.shape[0]} samples, but there a' \
-                                            f're {len(self.labels)} ' \
-                                          f'labels'
+                                               f're {len(self.labels)} ' \
+                                               f'labels'
 
     def encode_labels(self):
         # Translation list + dict to allow Pytorch one_hot() function
@@ -175,22 +198,26 @@ class ArrhythmiaDataset(Dataset):
             test_size = test_size,
             random_state = random_state,
             shuffle = shuffle,
-            stratify = self.labels_encoded)
+            stratify = self.labels_encoded
+        )
         (train_data, train_labels), (test_data, test_labels) = self[train_idx], self[valid_idx]
 
         # Prepare training dataset
-        train_dataset = ArrhythmiaDataset(self.root_dir, self.window_size, self.only_include_labels, load_data =
-        False, encode_labels = False)
+        train_dataset = ArrhythmiaDataset(
+            self.root_dir, self.window_size, self.only_include_labels, load_data =
+            False, encode_labels = False
+        )
         train_dataset.data, train_dataset.labels_encoded = train_data, train_labels
         train_dataset._label_list = self._label_list
         train_dataset._label_dict = self._label_dict
 
         # Prepare test dataset
-        test_dataset = ArrhythmiaDataset(self.root_dir, self.window_size, self.only_include_labels, load_data =
-        False, encode_labels = False)
+        test_dataset = ArrhythmiaDataset(
+            self.root_dir, self.window_size, self.only_include_labels, load_data =
+            False, encode_labels = False
+        )
         test_dataset.data, test_dataset.labels_encoded = test_data, test_labels
         test_dataset._label_list = self._label_list
         test_dataset._label_dict = self._label_dict
 
         return train_dataset, test_dataset
-
